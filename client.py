@@ -3,10 +3,11 @@ import socket
 import argparse
 import time
 import os
+import struct
 
 def run_client(target_ip, target_port, input_file):
-    # 1. Create a UDP socket
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.settimeout(0.5)
     server_address = (target_ip, target_port)
 
     print(f"[*] Sending file '{input_file}' to {target_ip}:{target_port}")
@@ -17,22 +18,32 @@ def run_client(target_ip, target_port, input_file):
 
     try:
         with open(input_file, 'rb') as f:
+            seq_num = 0
             while True:
-                # Read a chunk of the file
-                chunk = f.read(4096) # 4KB chunks
-                
+                chunk = f.read(4092)
                 if not chunk:
-                    # End of file reached
                     break
 
-                # Send the chunk
-                sock.sendto(chunk, server_address)
+                header = struct.pack('!I', seq_num)
+                packet = header + chunk
+
+                ack_received = False
+                while not ack_received:
+                    sock.sendto(packet, server_address)
+                    try:
+                        ack_data, _ = sock.recvfrom(4)
+                        ack_seq = struct.unpack('!I', ack_data)[0]
+                        if ack_seq == seq_num:
+                            ack_received = True
+                        else:
+                            continue
+                    except socket.timeout:
+                        print(f"[!] Timeout for seq {seq_num}, retransmitting...")
+                        continue
                 
-                # Optional: Small sleep to prevent overwhelming the OS buffer locally
-                # (In a perfect world, we wouldn't need this, but raw UDP is fast!)
+                seq_num += 1
                 time.sleep(0.001)
 
-        # Send empty packet to signal "End of File"
         sock.sendto(b'', server_address)
         print("[*] File transmission complete.")
 
